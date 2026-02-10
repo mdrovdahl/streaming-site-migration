@@ -16,6 +16,18 @@ if (!ob_get_level()) {
     ob_start();
 }
 
+// CORS headers — HMAC secret is the real auth gate, so allow all origins
+header('Access-Control-Allow-Origin: *');
+header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
+header('Access-Control-Allow-Headers: X-Auth-Signature, X-Auth-Nonce, X-Auth-Timestamp, X-Auth-Content-Hash, X-Export-Cursor, Content-Type');
+header('Access-Control-Expose-Headers: Content-Type');
+
+// Handle OPTIONS preflight
+if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+    http_response_code(204);
+    exit;
+}
+
 // Error handling
 set_error_handler(function ($errno, $errstr, $errfile, $errline) {
     $error = [
