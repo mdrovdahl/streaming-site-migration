@@ -1,0 +1,8 @@
+{
+  "name": "importer-js",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "typescript": "^5.7.0"
+  }
+}
