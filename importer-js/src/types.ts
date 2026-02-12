@@ -1,4 +1,5 @@
 export type EndpointName = 'preflight' | 'sql_preflight' | 'sql_chunk' | 'file_index' | 'file_fetch';
+export type ImportPhase = 'preflight' | 'sql_preflight' | 'sql' | 'file_index' | 'file_fetch' | 'rewrite';
 
 export type ChunkType = 'metadata' | 'index_batch' | 'file' | 'directory' | 'symlink' | 'missing' | 'sql' | 'table_stats' | 'progress' | 'completion' | 'error';
 
@@ -11,7 +12,6 @@ export interface ParsedChunk {
 export interface CompletionInfo {
   status: 'partial' | 'complete';
   cursor: string | null;
-  serverStats?: Record<string, unknown>;
 }
 
 export interface ImportProgress {
@@ -32,6 +32,12 @@ export interface ImportConfig {
   batchSize?: number;         // default 5000
   fragmentsPerBatch?: number; // default 1000
   chunkSize?: number;         // default 5242880 (5MB)
+  skipFiles?: boolean;        // skip uploading media (wp-content/uploads); proxy from source instead
+}
+
+export interface ImportResult {
+  serverRoot: string;
+  sourceUrl: string;           // base URL of the source site (derived from remoteUrl)
 }
 
 export interface ImportTarget {

@@ -231,12 +231,12 @@ describe('streamEndpoint', () => {
 				body: '{}',
 			},
 			{
-				headers: { 'X-Chunk-Type': 'completion' },
-				body: JSON.stringify({
-					status: 'partial',
-					cursor: '{"table":"wp_posts","pk":100}',
-					server_stats: { rows: 100 },
-				}),
+				headers: {
+					'X-Chunk-Type': 'completion',
+					'X-Status': 'partial',
+					'X-Cursor': btoa('{"table":"wp_posts","pk":100}'),
+				},
+				body: '',
 			},
 		]);
 
@@ -257,7 +257,6 @@ describe('streamEndpoint', () => {
 		expect(returnValue).toBeDefined();
 		expect(returnValue!.status).toBe('partial');
 		expect(returnValue!.cursor).toBe('{"table":"wp_posts","pk":100}');
-		expect(returnValue!.serverStats).toEqual({ rows: 100 });
 	});
 
 	it('throws on non-2xx response', async () => {

@@ -2,11 +2,56 @@
 
 ## Usage
 
+### PHP Importer (CLI)
+
 1. Install the `wordpress-plugin` on the site you want to export
-2. Set up the SECRET_KEY 
+2. Set up the SECRET_KEY
 3. Run the `import.php` script locally with the right args. Docs on that are coming.
 4. Go brew some coffee. If the electricity goes down that's okay, just re-run the script and it will resume where it left off.
 5. Done. Your local directory now has a db.sql file and a directory tree snapshot.
+
+### JS Import Client (WordPress Playground)
+
+The `importer-js` package provides a browser-side client that imports WordPress sites
+directly into [WordPress Playground](https://wordpress.github.io/wordpress-playground/)
+(WASM PHP + SQLite). It streams data from the same export plugin endpoints used by the
+PHP CLI importer.
+
+```
+npm install  # from importer-js/
+npm run build
+npm test     # 41 unit tests (hmac, cursor, multipart-parser, protocol-client)
+```
+
+**Architecture**:
+
+```
+importer-js/src/
+├── types.ts              # ImportConfig, ImportTarget, ImportProgress, ParsedChunk
+├── hmac.ts               # HMAC-SHA256 request signing (Web Crypto API)
+├── cursor.ts             # Base64 cursor encode/decode, server path mapping
+├── multipart-parser.ts   # Streaming multipart/mixed parser for chunked responses
+├── protocol-client.ts    # streamEndpoint() async generator — fetch + HMAC + multipart
+├── import-orchestrator.ts# importSite() — phases: preflight → sql → files
+├── playground-sink.ts    # PlaygroundImportTarget — executes SQL via $wpdb, writes files
+├── sql-stream-php.ts     # Bundled WP_MySQL_Naive_Query_Stream PHP class
+└── index.ts              # Public API exports
+```
+
+**Import phases** (all cursor-looped with retry/backoff):
+
+1. **Preflight** — Detects WordPress root path on the remote server
+2. **SQL Preflight** — Prepares database metadata
+3. **SQL Sync** — Streams SQL dump in ~2MB batches, executes through WordPress's
+   SQLite translation layer (`WP_SQLite_Driver`). Handles:
+   - Auto-drop before CREATE TABLE (existing tables from Playground boot)
+   - `FROM_BASE64()` → inline string decoding (MySQL function unsupported in SQLite)
+   - Skips `_wp_sqlite_` internal tables
+4. **File Index** — Builds remote file list via streaming index batches
+5. **File Fetch** — Downloads files with multi-chunk reassembly, creates directory trees
+
+**Demo app** (`importer-js-demo/`): Vite dev server on port 3000 with a one-click import
+UI. End-to-end Playwright test: `cd importer-js-demo && npx playwright test`
 
 ## Technical requirements
 

@@ -1,10 +1,11 @@
-import type { ImportConfig, ImportTarget, ImportProgress, ParsedChunk, CompletionInfo } from './types';
+import type { ImportConfig, ImportTarget, ImportProgress, ImportResult, ParsedChunk, CompletionInfo } from './types';
 import { streamEndpoint } from './protocol-client';
 import { mapServerPath } from './cursor';
 
 const DEFAULT_BATCH_SIZE = '5000';
 const DEFAULT_FRAGMENTS_PER_BATCH = '1000';
 const DEFAULT_CHUNK_SIZE = '5242880';
+const SQL_EXEC_BATCH_BYTES = 2 * 1024 * 1024; // Execute SQL in ~2MB increments
 
 const INTER_REQUEST_DELAY_MS = 500;
 const INITIAL_BACKOFF_MS = 2000;
@@ -16,12 +17,40 @@ export async function importSite(
 	target: ImportTarget,
 	onProgress?: (p: ImportProgress) => void,
 	signal?: AbortSignal,
-): Promise<void> {
+): Promise<ImportResult> {
 	const serverRoot = await runPreflight(config, signal);
-	await runSqlPreflight(config, onProgress, signal);
-	await runSqlSync(config, target, onProgress, signal);
-	const fileList = await runFileIndex(config, onProgress, signal);
-	await runFileFetch(config, target, serverRoot, fileList, onProgress, signal);
+	const sqlPreflight = await runSqlPreflight(config, onProgress, signal);
+	await runSqlSync(config, target, sqlPreflight.estimatedBytes, onProgress, signal);
+	onProgress?.({ phase: 'sql', status: 'complete' });
+
+	{
+		const fileList = await runFileIndex(config, serverRoot, onProgress, signal);
+
+		// Filter out core WordPress directories — Playground already has them.
+		// When skipFiles is set, also skip media uploads (themes/plugins still transfer).
+		// Note: paths from file_index are base64-encoded by the server.
+		const filtered = fileList.filter(f => {
+			const decoded = decodeBase64Path(f.path);
+			const rel = decoded.startsWith(serverRoot)
+				? decoded.slice(serverRoot.length).replace(/^\//, '')
+				: decoded;
+			if (rel.startsWith('wp-admin/') || rel.startsWith('wp-includes/')) {
+				return false;
+			}
+			if (config.skipFiles && rel.startsWith('wp-content/uploads/')) {
+				return false;
+			}
+			return true;
+		});
+
+		await runFileFetch(config, target, serverRoot, filtered, onProgress, signal);
+	}
+
+	// Derive the source site's base URL from the export API URL
+	const parsed = new URL(config.remoteUrl);
+	const sourceUrl = parsed.origin;
+
+	return { serverRoot, sourceUrl };
 }
 
 /**
@@ -94,11 +123,20 @@ async function runPreflight(
 	let metadata: Record<string, unknown> | undefined;
 
 	const gen = streamEndpoint(config, 'preflight', null, undefined, undefined, signal);
-	await drainGenerator(gen, (chunk) => {
+	const returnValue = await drainGenerator(gen, (chunk) => {
 		if (chunk.type === 'metadata') {
 			metadata = JSON.parse(new TextDecoder().decode(chunk.body));
 		}
 	});
+
+	// Preflight returns plain JSON (not multipart). streamEndpoint returns
+	// JSON responses as the generator's return value rather than yielding chunks.
+	if (!metadata && returnValue) {
+		const obj = returnValue as unknown as Record<string, unknown>;
+		if ('wp_detect' in obj) {
+			metadata = obj;
+		}
+	}
 
 	if (!metadata) {
 		throw new Error('Preflight: no metadata received');
@@ -117,14 +155,27 @@ async function runSqlPreflight(
 	config: ImportConfig,
 	onProgress?: (p: ImportProgress) => void,
 	signal?: AbortSignal,
-): Promise<void> {
+): Promise<{ estimatedBytes: number }> {
 	onProgress?.({ phase: 'sql_preflight', status: 'running' });
-	await cursorLoop(config, 'sql_preflight', undefined, undefined, undefined, signal);
+	let estimatedBytes = 0;
+	await cursorLoop(config, 'sql_preflight', undefined, undefined,
+		(chunk) => {
+			if (chunk.type === 'table_stats') {
+				const tables = JSON.parse(new TextDecoder().decode(chunk.body)) as Array<{ data_bytes?: number }>;
+				for (const t of tables) {
+					if (t.data_bytes) estimatedBytes += t.data_bytes;
+				}
+			}
+		},
+		signal,
+	);
+	return { estimatedBytes };
 }
 
 async function runSqlSync(
 	config: ImportConfig,
 	target: ImportTarget,
+	estimatedBytes: number,
 	onProgress?: (p: ImportProgress) => void,
 	signal?: AbortSignal,
 ): Promise<void> {
@@ -132,25 +183,44 @@ async function runSqlSync(
 	let consecutiveFailures = 0;
 	let backoffMs = INITIAL_BACKOFF_MS;
 	const fragmentsPerBatch = String(config.fragmentsPerBatch ?? DEFAULT_FRAGMENTS_PER_BATCH);
+	let totalBytesReceived = 0;
 
 	while (true) {
 		signal?.throwIfAborted();
-		onProgress?.({ phase: 'sql', status: 'running' });
+		onProgress?.({ phase: 'sql', status: 'running', bytesTotal: estimatedBytes, bytesDone: totalBytesReceived });
 
 		try {
-			const sqlBuffer: Uint8Array[] = [];
+			let sqlBuffer: Uint8Array[] = [];
+			let sqlBufferSize = 0;
+			let batchesExecuted = 0;
+
 			const gen = streamEndpoint(
 				config, 'sql_chunk', cursor,
 				{ fragments_per_batch: fragmentsPerBatch },
 				undefined, signal,
 			);
 
-			const completion = await drainGenerator(gen, (chunk) => {
+			const completion = await drainGenerator(gen, async (chunk) => {
 				if (chunk.type === 'sql') {
 					sqlBuffer.push(chunk.body);
+					sqlBufferSize += chunk.body.length;
+					totalBytesReceived += chunk.body.length;
+
+					if (sqlBufferSize >= SQL_EXEC_BATCH_BYTES) {
+						const combined = concatUint8Arrays(sqlBuffer);
+						const result = await target.executeSql(combined);
+						if (result.exitCode !== 0) {
+							throw new Error(`SQL execution failed: ${result.errors}`);
+						}
+						batchesExecuted++;
+						onProgress?.({ phase: 'sql', status: `batch ${batchesExecuted}`, bytesTotal: estimatedBytes, bytesDone: totalBytesReceived });
+						sqlBuffer = [];
+						sqlBufferSize = 0;
+					}
 				}
 			});
 
+			// Execute remaining SQL
 			if (sqlBuffer.length > 0) {
 				const combined = concatUint8Arrays(sqlBuffer);
 				const result = await target.executeSql(combined);
@@ -181,6 +251,7 @@ async function runSqlSync(
 
 async function runFileIndex(
 	config: ImportConfig,
+	serverRoot: string,
 	onProgress?: (p: ImportProgress) => void,
 	signal?: AbortSignal,
 ): Promise<FileIndexEntry[]> {
@@ -188,7 +259,7 @@ async function runFileIndex(
 	const fileList: FileIndexEntry[] = [];
 
 	await cursorLoop(
-		config, 'file_index', { batch_size: batchSize }, undefined,
+		config, 'file_index', { batch_size: batchSize, list_dir: serverRoot }, undefined,
 		(chunk) => {
 			if (chunk.type === 'index_batch') {
 				const batch = JSON.parse(new TextDecoder().decode(chunk.body)) as FileIndexEntry[];
@@ -221,7 +292,8 @@ async function runFileFetch(
 	let consecutiveFailures = 0;
 	let backoffMs = INITIAL_BACKOFF_MS;
 	const chunkSize = String(config.chunkSize ?? DEFAULT_CHUNK_SIZE);
-	const fileBody = new TextEncoder().encode(JSON.stringify(fileList.map(f => f.path)));
+	// Decode base64-encoded paths from file_index before sending to server
+	const fileBody = new TextEncoder().encode(JSON.stringify(fileList.map(f => decodeBase64Path(f.path))));
 	let filesDone = 0;
 	const pendingFiles = new Map<string, Uint8Array[]>();
 
@@ -241,7 +313,7 @@ async function runFileFetch(
 					await handleFileChunk(chunk, target, serverRoot, pendingFiles);
 					filesDone++;
 				} else if (chunk.type === 'directory') {
-					const dirPath = chunk.headers['x-file-path'] ?? '';
+					const dirPath = decodeBase64Path(chunk.headers['x-directory-path'] ?? chunk.headers['x-file-path'] ?? '');
 					const localPath = mapServerPath(dirPath, serverRoot, target.documentRoot);
 					await target.mkdirTree(localPath);
 				}
@@ -274,7 +346,7 @@ async function handleFileChunk(
 	serverRoot: string,
 	pendingFiles: Map<string, Uint8Array[]>,
 ): Promise<void> {
-	const filePath = chunk.headers['x-file-path'] ?? '';
+	const filePath = decodeBase64Path(chunk.headers['x-file-path'] ?? '');
 	const chunkIndex = parseInt(chunk.headers['x-chunk-index'] ?? '0', 10);
 	const totalChunks = parseInt(chunk.headers['x-total-chunks'] ?? '1', 10);
 
@@ -300,6 +372,16 @@ async function handleFileChunk(
 
 export function sleep(ms: number): Promise<void> {
 	return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function decodeBase64Path(encoded: string): string {
+	try {
+		return new TextDecoder().decode(
+			Uint8Array.from(atob(encoded), c => c.charCodeAt(0)),
+		);
+	} catch {
+		return encoded; // Already decoded or not base64
+	}
 }
 
 export function concatUint8Arrays(arrays: Uint8Array[]): Uint8Array {

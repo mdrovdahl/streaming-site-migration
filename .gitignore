@@ -15,6 +15,9 @@ tests/.phpunit.result.cache
 exports
 siteground-export-*
 node_modules
+dist
+test-results
+package-lock.json
 
 
 # Gas Town (added by gt)

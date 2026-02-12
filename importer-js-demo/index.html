@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Site Import Demo</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #1e1e2e; color: #cdd6f4; }
+
+    .container { max-width: 1200px; margin: 0 auto; padding: 16px; }
+    h1 { font-size: 20px; font-weight: 600; margin-bottom: 16px; }
+
+    .controls {
+      display: flex; gap: 12px; align-items: end; flex-wrap: wrap;
+      background: #313244; border-radius: 8px; padding: 16px; margin-bottom: 16px;
+    }
+    .field { display: flex; flex-direction: column; gap: 4px; }
+    .field label { font-size: 12px; color: #a6adc8; text-transform: uppercase; letter-spacing: 0.5px; }
+    .field input {
+      background: #1e1e2e; border: 1px solid #45475a; border-radius: 4px;
+      color: #cdd6f4; padding: 8px 12px; font-size: 14px; font-family: monospace;
+    }
+    .field input:focus { outline: none; border-color: #89b4fa; }
+    .field.url { flex: 1; min-width: 300px; }
+    .field.secret { flex: 1; min-width: 250px; }
+
+    button {
+      background: #89b4fa; color: #1e1e2e; border: none; border-radius: 4px;
+      padding: 8px 20px; font-size: 14px; font-weight: 600; cursor: pointer;
+      height: 36px; white-space: nowrap;
+    }
+    button:hover { background: #74c7ec; }
+    button:disabled { background: #45475a; color: #6c7086; cursor: not-allowed; }
+    button.cancel { background: #f38ba8; }
+    button.cancel:hover { background: #eba0ac; }
+
+    .status-bar {
+      background: #313244; border-radius: 8px; padding: 12px 16px; margin-bottom: 16px;
+      display: none; gap: 16px; align-items: center;
+    }
+    .status-bar.visible { display: flex; }
+    .phase-badge {
+      background: #45475a; border-radius: 4px; padding: 4px 10px;
+      font-size: 12px; font-weight: 600; text-transform: uppercase;
+      letter-spacing: 0.5px; white-space: nowrap;
+    }
+    .phase-badge.active { background: #89b4fa; color: #1e1e2e; }
+    .phase-badge.done { background: #a6e3a1; color: #1e1e2e; }
+    .phase-badge.error { background: #f38ba8; color: #1e1e2e; }
+    .status-message { flex: 1; font-size: 14px; }
+    .status-count { font-family: monospace; font-size: 13px; color: #a6adc8; }
+
+    .log {
+      background: #181825; border-radius: 8px; padding: 12px; margin-bottom: 16px;
+      max-height: 160px; overflow-y: auto; font-family: monospace; font-size: 12px;
+      line-height: 1.6; display: none;
+    }
+    .log.visible { display: block; }
+    .log .entry { color: #a6adc8; }
+    .log .entry.error { color: #f38ba8; }
+    .log .entry.success { color: #a6e3a1; }
+
+    iframe {
+      width: 100%; height: calc(100vh - 300px); min-height: 400px;
+      border: 1px solid #45475a; border-radius: 8px; background: #fff;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>WordPress Playground Site Import</h1>
+
+    <div class="controls">
+      <div class="field url">
+        <label>Export API URL</label>
+        <input id="url" type="text" placeholder="https://example.com/?site-export-api" />
+      </div>
+      <div class="field secret">
+        <label>HMAC Secret</label>
+        <input id="secret" type="password" placeholder="HMAC secret" />
+      </div>
+      <div class="field">
+        <label>&nbsp;</label>
+        <label style="display:flex;gap:6px;align-items:center;cursor:pointer;font-size:14px;color:#cdd6f4;text-transform:none;letter-spacing:0">
+          <input id="skip-files" type="checkbox" checked /> Proxy media from source
+        </label>
+      </div>
+      <button id="btn-import" disabled>Loading Playground...</button>
+      <button id="btn-cancel" class="cancel" style="display:none">Cancel</button>
+      <button id="btn-admin" style="display:none;background:#cba6f7" disabled>WP Admin</button>
+      <button id="btn-fullscreen" style="display:none;background:#a6e3a1">Full Screen</button>
+      <button id="btn-delete" class="cancel" style="display:none">Delete Local Site</button>
+    </div>
+
+    <div id="status-bar" class="status-bar">
+      <span id="phase-badge" class="phase-badge">-</span>
+      <span id="status-message" class="status-message">-</span>
+      <span id="status-count" class="status-count"></span>
+    </div>
+
+    <div id="log" class="log"></div>
+
+    <iframe id="playground"></iframe>
+  </div>
+
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

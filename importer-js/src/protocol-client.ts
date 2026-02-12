@@ -121,10 +121,12 @@ export async function* streamEndpoint(
 }
 
 function parseCompletionChunk(chunk: ParsedChunk): CompletionInfo {
-	const json = JSON.parse(new TextDecoder().decode(chunk.body));
+	// Completion chunks carry status/cursor in headers, not body
+	// (PHP sends Content-Length: 0 with X-Status/X-Cursor headers)
+	const status = chunk.headers['x-status'] ?? 'complete';
+	const cursorB64 = chunk.headers['x-cursor'] ?? null;
 	return {
-		status: json.status ?? 'complete',
-		cursor: json.cursor ?? null,
-		serverStats: json.server_stats,
+		status: status as CompletionInfo['status'],
+		cursor: cursorB64 ? atob(cursorB64) : null,
 	};
 }

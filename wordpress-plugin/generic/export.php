@@ -2635,6 +2635,18 @@ function endpoint_file_index(
     $stack = [];
     $ordered = [];
     $follow_symlinks = !empty($config["follow_symlinks"]);
+
+    // Directories to exclude from indexing (relative to list_dir, e.g. "wp-content/uploads").
+    $exclude_dirs_raw = $config["exclude_dirs"] ?? null;
+    $exclude_dirs = [];
+    if (is_string($exclude_dirs_raw) && $exclude_dirs_raw !== "") {
+        foreach (explode(",", $exclude_dirs_raw) as $d) {
+            $d = trim($d, " /");
+            if ($d !== "") {
+                $exclude_dirs[] = $d;
+            }
+        }
+    }
     $cursor_provided = isset($config["cursor"]);
 
     if ($cursor_provided) {
@@ -2968,6 +2980,19 @@ function endpoint_file_index(
                     $type = "dir";
                 } elseif ($mode !== 0100000) {
                     $type = "other";
+                }
+
+                // Skip excluded directories (and their contents)
+                if (($type === "dir" || $type === "link") && !empty($exclude_dirs) && $list_dir_real !== null) {
+                    $resolved = ($type === "link" && isset($link_target)) ? $link_target : $path;
+                    $rel = str_starts_with($resolved, $list_dir_real . "/")
+                        ? substr($resolved, strlen($list_dir_real) + 1)
+                        : "";
+                    foreach ($exclude_dirs as $excl) {
+                        if ($rel === $excl || str_starts_with($rel, $excl . "/")) {
+                            continue 2; // skip this entry entirely
+                        }
+                    }
                 }
 
                 $ctime = (int) ($stat["ctime"] ?? 0);
