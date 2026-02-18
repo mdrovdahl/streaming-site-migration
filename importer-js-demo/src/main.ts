@@ -387,6 +387,15 @@ async function detectServerRoot(remoteUrl: string, secret: string): Promise<Pref
     if (!root) throw new Error('No WordPress root found');
     log(`Server root: ${root}`, 'success');
 
+    // Log WordPress / PHP version if available
+    const wpVersion = json.wp_detect?.wp_version;
+    const phpVersion = json.php_version;
+    if (wpVersion) {
+      log(`WordPress ${wpVersion}${phpVersion ? ` (PHP ${phpVersion})` : ''}`);
+    } else if (phpVersion) {
+      log(`PHP ${phpVersion}`);
+    }
+
     const exportSettings: ExportSettings | null = json.export_settings ?? null;
     if (exportSettings) {
       const flags: string[] = [];
@@ -400,6 +409,24 @@ async function detectServerRoot(remoteUrl: string, secret: string): Promise<Pref
         log(`Source settings: ${flags.join(', ')}`, 'success');
       } else {
         log('Source settings: full export (no filters)');
+      }
+
+      // Log active theme names
+      if (exportSettings.active_theme_dirs.length > 0) {
+        const themes = exportSettings.active_theme_dirs.map(d => d.split('/').pop() ?? d);
+        log(`Themes: ${themes.join(', ')}`);
+      }
+
+      // Log active plugin names (first 3, then "+N more")
+      if (exportSettings.active_plugin_dirs.length > 0) {
+        const plugins = exportSettings.active_plugin_dirs.map(d => d.split('/').pop() ?? d);
+        const MAX_SHOW = 3;
+        if (plugins.length <= MAX_SHOW) {
+          log(`Plugins: ${plugins.join(', ')}`);
+        } else {
+          const shown = plugins.slice(0, MAX_SHOW).join(', ');
+          log(`Plugins: ${shown}, +${plugins.length - MAX_SHOW} more`);
+        }
       }
     }
 
