@@ -51,6 +51,13 @@
     .status-message { flex: 1; font-size: 14px; }
     .status-count { font-family: monospace; font-size: 13px; color: #a6adc8; }
 
+    .proxy-badge {
+      background: #fab387; color: #1e1e2e; border-radius: 4px; padding: 4px 10px;
+      font-size: 13px; font-weight: 600; margin-bottom: 16px; display: none; align-items: center; gap: 6px;
+    }
+    .proxy-badge.visible { display: flex; }
+    .proxy-badge a { color: #1e1e2e; text-decoration: underline; }
+
     .log {
       background: #181825; border-radius: 8px; padding: 12px; margin-bottom: 16px;
       max-height: 160px; overflow-y: auto; font-family: monospace; font-size: 12px;
@@ -98,6 +105,8 @@
       <span id="status-message" class="status-message">-</span>
       <span id="status-count" class="status-count"></span>
     </div>
+
+    <div id="proxy-badge" class="proxy-badge">&#128279; Media proxied from <a id="proxy-badge-link" href="#" target="_blank"></a></div>
 
     <div id="log" class="log"></div>
 

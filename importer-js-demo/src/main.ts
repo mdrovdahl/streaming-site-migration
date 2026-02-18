@@ -17,9 +17,18 @@ const skipFilesInput = document.getElementById('skip-files') as HTMLInputElement
 const btnAdmin = document.getElementById('btn-admin') as HTMLButtonElement;
 const btnFullscreen = document.getElementById('btn-fullscreen') as HTMLButtonElement;
 const btnDelete = document.getElementById('btn-delete') as HTMLButtonElement;
+const proxyBadge = document.getElementById('proxy-badge')!;
+const proxyBadgeLink = document.getElementById('proxy-badge-link') as HTMLAnchorElement;
 
 let playground: PlaygroundClient;
 let abortController: AbortController | null = null;
+
+function showProxyBadge(sourceUrl: string) {
+  const domain = new URL(sourceUrl).hostname;
+  proxyBadgeLink.textContent = domain;
+  proxyBadgeLink.href = sourceUrl;
+  proxyBadge.classList.add('visible');
+}
 
 function log(msg: string, cls = 'entry') {
   logEl.classList.add('visible');
@@ -236,6 +245,8 @@ async function boot() {
       btnAdmin.style.display = '';
       btnFullscreen.style.display = '';
       btnDelete.style.display = '';
+      const proxyUrl = localStorage.getItem('proxy-source-url');
+      if (proxyUrl) showProxyBadge(proxyUrl);
       await playground.goTo('/');
       log('Site loaded', 'success');
     } else {
@@ -308,6 +319,8 @@ async function runImport() {
       showStatus('Finalize', 'Rewriting content URLs to source...');
       await target.rewriteContentUrls(result.sourceUrl);
       log(`Media proxied from ${result.sourceUrl}`, 'success');
+      localStorage.setItem('proxy-source-url', result.sourceUrl);
+      showProxyBadge(result.sourceUrl);
     }
 
     // Persist wp-content to OPFS so site survives page reloads
@@ -443,6 +456,7 @@ btnDelete.addEventListener('click', async () => {
     console.warn('OPFS clear failed:', e);
   }
   localStorage.removeItem('site-imported');
+  localStorage.removeItem('proxy-source-url');
   location.reload();
 });
 
