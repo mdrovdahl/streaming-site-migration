@@ -10,6 +10,7 @@ const statusBar = document.getElementById('status-bar')!;
 const phaseBadge = document.getElementById('phase-badge')!;
 const statusMessage = document.getElementById('status-message')!;
 const statusCount = document.getElementById('status-count')!;
+const elapsedTime = document.getElementById('elapsed-time')!;
 const logEl = document.getElementById('log')!;
 const urlInput = document.getElementById('url') as HTMLInputElement;
 const secretInput = document.getElementById('secret') as HTMLInputElement;
@@ -20,6 +21,34 @@ const btnDelete = document.getElementById('btn-delete') as HTMLButtonElement;
 
 let playground: PlaygroundClient;
 let abortController: AbortController | null = null;
+let elapsedInterval: ReturnType<typeof setInterval> | null = null;
+
+function formatElapsed(ms: number): string {
+  const totalSec = Math.floor(ms / 1000);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  if (h > 0) {
+    return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  }
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+function startElapsedTimer() {
+  stopElapsedTimer();
+  const startTime = Date.now();
+  elapsedTime.textContent = '0:00';
+  elapsedInterval = setInterval(() => {
+    elapsedTime.textContent = formatElapsed(Date.now() - startTime);
+  }, 1000);
+}
+
+function stopElapsedTimer() {
+  if (elapsedInterval !== null) {
+    clearInterval(elapsedInterval);
+    elapsedInterval = null;
+  }
+}
 
 function log(msg: string, cls = 'entry') {
   logEl.classList.add('visible');
@@ -39,6 +68,7 @@ function showStatus(phase: string, message: string, count = '') {
 }
 
 function showDone(phase: string, message: string) {
+  stopElapsedTimer();
   phaseBadge.textContent = phase;
   phaseBadge.className = 'phase-badge done';
   statusMessage.textContent = message;
@@ -46,6 +76,7 @@ function showDone(phase: string, message: string) {
 }
 
 function showError(message: string) {
+  stopElapsedTimer();
   phaseBadge.textContent = 'ERROR';
   phaseBadge.className = 'phase-badge error';
   statusMessage.textContent = message;
@@ -264,6 +295,7 @@ async function runImport() {
   abortController = new AbortController();
   btnImport.disabled = true;
   btnCancel.style.display = '';
+  startElapsedTimer();
 
   const preflight = await detectServerRoot(remoteUrl, secret);
   if (!preflight) return;
