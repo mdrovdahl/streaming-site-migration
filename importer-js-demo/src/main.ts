@@ -180,6 +180,64 @@ add_action('init', function() {
   );
 }
 
+async function fetchLatestGitHubRelease(owner: string, repo: string): Promise<Uint8Array> {
+  const apiUrl = `https://api.github.com/repos/${owner}/${repo}/releases/latest`;
+  const meta = await fetch(apiUrl, {
+    headers: { Accept: 'application/vnd.github.v3+json' },
+  });
+  if (!meta.ok) throw new Error(`GitHub API ${meta.status} for ${owner}/${repo}`);
+  const release = await meta.json();
+  const zipAsset = release.assets?.find((a: any) => a.name.endsWith('.zip'));
+  const zipUrl = zipAsset?.browser_download_url ?? release.zipball_url;
+  const res = await fetch(zipUrl);
+  if (!res.ok) throw new Error(`Download failed: HTTP ${res.status}`);
+  return new Uint8Array(await res.arrayBuffer());
+}
+
+async function installQueryMonitor() {
+  const docroot = await playground.documentRoot;
+  const zipData = await fetchLatestGitHubRelease('johnbillion', 'query-monitor');
+  const zipPath = '/tmp/query-monitor.zip';
+  await playground.writeFile(zipPath, zipData);
+  await playground.run({
+    code: `<?php
+$zip = new ZipArchive();
+if ($zip->open('${zipPath}') !== true) { echo 'ZIP open failed'; exit(1); }
+$extractDir = '${docroot}/wp-content/plugins';
+$zip->extractTo($extractDir);
+// Detect the extracted top-level directory and rename to query-monitor
+$topDir = null;
+for ($i = 0; $i < $zip->numFiles; $i++) {
+  $name = $zip->getNameIndex($i);
+  $parts = explode('/', $name);
+  if ($parts[0] !== '' && $parts[0] !== 'query-monitor') {
+    $topDir = $parts[0];
+    break;
+  }
+}
+$zip->close();
+unlink('${zipPath}');
+if ($topDir && $topDir !== 'query-monitor' && is_dir($extractDir . '/' . $topDir)) {
+  rename($extractDir . '/' . $topDir, $extractDir . '/query-monitor');
+}
+// Activate via SQLite
+$dbPath = '${docroot}/wp-content/database/.ht.sqlite';
+if (file_exists($dbPath)) {
+  $db = new PDO('sqlite:' . $dbPath);
+  $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+  $row = $db->query("SELECT option_value FROM wp_options WHERE option_name = 'active_plugins'")->fetch(PDO::FETCH_ASSOC);
+  $plugins = $row ? unserialize($row['option_value']) : [];
+  if (!in_array('query-monitor/query-monitor.php', $plugins)) {
+    $plugins[] = 'query-monitor/query-monitor.php';
+    $stmt = $db->prepare("UPDATE wp_options SET option_value = ? WHERE option_name = 'active_plugins'");
+    $stmt->execute([serialize($plugins)]);
+  }
+}
+echo 'OK';
+`,
+  });
+}
+
 const OPFS_MOUNT_PATH = '/site-import-wp-content';
 
 async function persistToOpfs() {
@@ -302,6 +360,11 @@ async function runImport() {
 
     // Install auto-login mu-plugin so WP Admin is accessible
     await installAutoLogin();
+
+    // Install Query Monitor dev tooling
+    showStatus('Finalize', 'Installing Query Monitor...');
+    await installQueryMonitor();
+    log('Query Monitor installed and activated', 'success');
 
     // When files are skipped, rewrite content URLs to load from source
     if (skipFiles) {
