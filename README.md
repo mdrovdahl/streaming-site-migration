@@ -61,6 +61,20 @@ importer-js/src/
 **Demo app** (`importer-js-demo/`): Vite dev server on port 3000 with a one-click import
 UI. End-to-end Playwright test: `cd importer-js-demo && npx playwright test`
 
+#### Playground Admin Safe Mode
+
+The demo's `Safe Mode` button opens `/wp-admin/` with a Playground-specific safety
+profile to reduce wp-admin timeouts after import:
+
+- `DISABLE_WP_CRON` is enforced in `wp-config.php`
+- an MU plugin (`wp-content/mu-plugins/playground-admin-safe-mode.php`) filters
+  plugin activation for admin requests (`/wp-admin/`)
+- for admin requests, regular plugins and network-active plugins are disabled
+  (`option_active_plugins` and `site_option_active_sitewide_plugins` return empty arrays)
+
+This behavior is intentionally scoped to wp-admin in Playground so the imported
+frontend still reflects the source site as closely as possible.
+
 ### WordPress Plugin (Export Side)
 
 The plugin registers under **Tools → Streaming Exporter** in WP Admin. After

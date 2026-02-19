@@ -245,6 +245,28 @@ add_action('init', function() {
 });
 `),
   );
+  await playground.writeFile(
+    muPluginsDir + '/playground-admin-safe-mode.php',
+    new TextEncoder().encode(`<?php
+// In Playground, wp-admin can time out on SQLite-incompatible/heavy plugins.
+// For admin requests only, disable regular plugins entirely for stability.
+add_filter('option_active_plugins', function($plugins) {
+    if (!is_array($plugins)) return $plugins;
+    $uri = $_SERVER['REQUEST_URI'] ?? '';
+    $is_admin_request = (defined('WP_ADMIN') && WP_ADMIN) || str_contains($uri, '/wp-admin/');
+    if (!$is_admin_request) return $plugins;
+    return [];
+}, 1);
+
+// If multisite is detected, also disable network-activated plugins in wp-admin.
+add_filter('site_option_active_sitewide_plugins', function($plugins) {
+    $uri = $_SERVER['REQUEST_URI'] ?? '';
+    $is_admin_request = (defined('WP_ADMIN') && WP_ADMIN) || str_contains($uri, '/wp-admin/');
+    if (!$is_admin_request) return $plugins;
+    return [];
+}, 1);
+`),
+  );
 }
 
 async function disableWpCron() {
@@ -271,6 +293,49 @@ if (strpos($wpConfig, "DISABLE_WP_CRON") === false) {
 @file_put_contents($wpConfigPath, $wpConfig);
 `,
   });
+}
+
+async function applyPlaygroundCompatibility() {
+  const docroot = await playground.documentRoot;
+  const result = await playground.run({
+    code: `<?php
+$dbPath = '${docroot}/wp-content/database/.ht.sqlite';
+if (!file_exists($dbPath)) { echo 'no-db'; exit(0); }
+$db = new PDO('sqlite:' . $dbPath);
+$db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+$row = $db->query("SELECT option_value FROM wp_options WHERE option_name = 'active_plugins'")->fetch();
+if (!$row) { echo 'no-active-plugins'; exit(0); }
+$plugins = @unserialize($row['option_value']);
+if (!is_array($plugins)) { echo 'invalid-active-plugins'; exit(0); }
+$blockedPrefixes = [
+  'woocommerce-subscriptions/',
+  'zero-bs-crm/',
+  'safety-net/',
+];
+$removed = [];
+$kept = [];
+foreach ($plugins as $plugin) {
+  $blocked = false;
+  foreach ($blockedPrefixes as $prefix) {
+    if (strpos($plugin, $prefix) === 0) {
+      $blocked = true;
+      $removed[] = $plugin;
+      break;
+    }
+  }
+  if (!$blocked) $kept[] = $plugin;
+}
+if (count($removed) > 0) {
+  $stmt = $db->prepare("UPDATE wp_options SET option_value = ? WHERE option_name = 'active_plugins'");
+  $stmt->execute([serialize(array_values($kept))]);
+}
+echo count($removed) > 0 ? ('removed:' . implode(',', $removed)) : 'removed:none';
+`,
+  });
+  const output = (result as any)?.text ?? '';
+  if (typeof output === 'string' && output.startsWith('removed:') && output !== 'removed:none') {
+    log(`Playground compatibility: ${output.slice('removed:'.length)}`, 'success');
+  }
 }
 
 async function installQueryMonitor() {
@@ -348,6 +413,23 @@ async function restoreFromOpfs(): Promise<boolean> {
   }
 }
 
+async function goToWithRetries(path: string, attempts = 4): Promise<void> {
+  let lastError: unknown = null;
+  for (let i = 1; i <= attempts; i++) {
+    try {
+      await playground.goTo(path);
+      return;
+    } catch (err) {
+      lastError = err;
+      if (i < attempts) {
+        log(`Navigation retry ${i}/${attempts - 1} for ${path}...`);
+        await new Promise((resolve) => setTimeout(resolve, 1500 * i));
+      }
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
 async function boot() {
   log('Booting WordPress Playground...');
   setProxyMediaCheckbox();
@@ -364,6 +446,7 @@ async function boot() {
       await rewriteSiteUrl();
       await disableWpCron();
       log('Disabled WP-Cron for Playground runtime');
+      await applyPlaygroundCompatibility();
       await installAutoLogin();
       btnAdmin.style.display = '';
       btnFullscreen.style.display = '';
@@ -442,6 +525,9 @@ async function runImport() {
     showStatus('Finalize', 'Disabling WP-Cron...');
     await disableWpCron();
     log('Disabled WP-Cron for Playground runtime', 'success');
+
+    showStatus('Finalize', 'Applying Playground compatibility...');
+    await applyPlaygroundCompatibility();
 
     // Install Query Monitor for debugging
     showStatus('Finalize', 'Installing Query Monitor...');
@@ -596,8 +682,21 @@ btnCancel.addEventListener('click', () => {
   abortController?.abort();
 });
 btnAdmin.addEventListener('click', async () => {
-  await installAutoLogin();
-  await playground.goTo('/wp-admin/');
+  btnAdmin.disabled = true;
+  showStatus('Navigate', 'Opening WP Admin (Safe Mode)...');
+  try {
+    await installAutoLogin();
+    // Playground sometimes times out under heavy plugin/admin-ajax load.
+    // Retry navigation to provide a longer effective timeout window.
+    await goToWithRetries('/wp-admin/', 6);
+    showDone('DONE', 'WP Admin loaded (Safe Mode)');
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    showError(`WP Admin failed: ${msg}`);
+    log(`WP Admin failed: ${msg}`, 'error');
+  } finally {
+    btnAdmin.disabled = false;
+  }
 });
 btnFullscreen.addEventListener('click', () => {
   iframe.requestFullscreen?.() ?? (iframe as any).webkitRequestFullscreen?.();
