@@ -25,46 +25,29 @@ class Site_Export_Plugin {
         add_action('admin_menu', [$this, 'add_admin_menu']);
         add_action('admin_init', [$this, 'handle_settings_save']);
         add_filter('plugin_action_links_' . plugin_basename(SITE_EXPORT_PLUGIN_DIR . 'index.php'), [$this, 'add_settings_link']);
-        add_action('admin_bar_menu', [$this, 'add_admin_bar_node'], 100);
     }
 
     /**
      * Add "Settings" link to the plugin row on the Plugins page.
      */
     public function add_settings_link(array $links): array {
-        $url = admin_url('admin.php?page=site-export');
+        $url = admin_url('tools.php?page=site-export');
         array_unshift($links, '<a href="' . esc_url($url) . '">Settings</a>');
         return $links;
     }
 
     /**
-     * Add top-level admin menu page.
+     * Add submenu page under Tools.
      */
     public function add_admin_menu() {
-        add_menu_page(
-            'Site Export',
-            'Site Export',
+        add_submenu_page(
+            'tools.php',
+            'Streaming Exporter',
+            'Streaming Exporter',
             'manage_options',
             'site-export',
-            [$this, 'render_admin_page'],
-            'dashicons-cloud-upload'
+            [$this, 'render_admin_page']
         );
-    }
-
-    /**
-     * Add "Site Export" link to the admin bar.
-     */
-    public function add_admin_bar_node($wp_admin_bar) {
-        if (!current_user_can('manage_options')) {
-            return;
-        }
-
-        $wp_admin_bar->add_node([
-            'id'    => 'site-export',
-            'title' => 'Site Export',
-            'href'  => admin_url('admin.php?page=site-export'),
-            'meta'  => ['title' => 'Site Export'],
-        ]);
     }
 
     /**
@@ -281,26 +264,26 @@ class Site_Export_Plugin {
 
         <div class="site-export-wrap">
             <h1>Site Export</h1>
-            <p class="subtitle">Allow an external tool to download your site's database and files.</p>
+            <p class="subtitle">Securely stream this site's database and files (optional) to an authorized WordPress Playground instance.</p>
 
             <?php settings_errors('site_export'); ?>
 
             <?php if ($is_configured): ?>
             <div class="site-export-status is-ready">
                 <span class="dashicons dashicons-yes-alt"></span>
-                <span><strong>Connected.</strong> The export API is ready to accept requests.</span>
+                <span><strong>Ready to export.</strong> The import tool can now connect to this site.</span>
             </div>
             <?php else: ?>
             <div class="site-export-status is-pending">
                 <span class="dashicons dashicons-warning"></span>
-                <span><strong>Not configured yet.</strong> Paste the connection token from your import tool below to get started.</span>
+                <span><strong>Waiting for connection.</strong> Open your import tool &mdash; it will give you a connection token to paste below.</span>
             </div>
             <?php endif; ?>
 
             <div class="site-export-card">
                 <h2>Connection Token</h2>
                 <p class="card-desc">
-                    Your import tool will give you a token. Paste it here to authorize the connection.
+                    Copy the token from your import tool and paste it here. This authorizes the import tool to download your site's data.
                 </p>
 
                 <form method="post" action="">
@@ -311,7 +294,7 @@ class Site_Export_Plugin {
                                id="site_export_secret"
                                name="site_export_secret"
                                value="<?php echo esc_attr($secret); ?>"
-                               placeholder="Paste your token here"
+                               placeholder="Paste connection token"
                                autocomplete="off" />
                         <button type="button" class="site-export-toggle-btn" onclick="siteExportToggleSecret()" title="Show / hide token">
                             <span class="dashicons dashicons-visibility"></span>
@@ -328,7 +311,7 @@ class Site_Export_Plugin {
             <div class="site-export-card">
                 <h2>API Endpoint</h2>
                 <p class="card-desc">
-                    If your import tool asks for an endpoint URL, copy this:
+                    Paste this URL into your import tool so it knows where to connect:
                 </p>
                 <div class="site-export-endpoint">
                     <code id="site-export-api-url"><?php echo esc_html($api_url); ?></code>
@@ -375,13 +358,29 @@ register_activation_hook(SITE_EXPORT_PLUGIN_DIR . 'index.php', function() {
     }
 });
 
-// Redirect to settings page after activation.
+// Redirect to settings page after activation or upgrade.
 add_action('admin_init', function() {
     if (get_transient('site_export_activated')) {
         delete_transient('site_export_activated');
         if (!isset($_GET['activate-multi'])) {
-            wp_safe_redirect(admin_url('admin.php?page=site-export'));
+            wp_safe_redirect(admin_url('tools.php?page=site-export'));
             exit;
         }
     }
 });
+
+// On upgrade: set the same transient so the next admin page load redirects to settings.
+add_action('upgrader_process_complete', function($upgrader, $options) {
+    if ($options['action'] !== 'update' || $options['type'] !== 'plugin') {
+        return;
+    }
+    // Check if our plugin was in the update list
+    $our_plugin = plugin_basename(SITE_EXPORT_PLUGIN_DIR . 'index.php');
+    $plugins = isset($options['plugins']) ? $options['plugins'] : [];
+    if (isset($options['plugin'])) {
+        $plugins[] = $options['plugin'];
+    }
+    if (in_array($our_plugin, $plugins, true)) {
+        set_transient('site_export_activated', 1, 30);
+    }
+}, 10, 2);

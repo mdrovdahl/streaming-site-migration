@@ -204,6 +204,24 @@ function site_export_find_wp_root(): ?string {
 }
 
 // =============================================================================
+// CORS — allow browser-based import tools (e.g. Playground) to call the API
+// =============================================================================
+$origin = isset($_SERVER['HTTP_ORIGIN']) ? $_SERVER['HTTP_ORIGIN'] : '';
+if ($origin !== '') {
+    header('Access-Control-Allow-Origin: ' . $origin);
+    header('Access-Control-Allow-Headers: X-Auth-Signature, X-Auth-Nonce, X-Auth-Timestamp, X-Auth-Content-Hash, X-Export-Cursor, Content-Type');
+    header('Access-Control-Expose-Headers: X-Export-Cursor, X-Server-Timing');
+    header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
+}
+
+// Handle CORS preflight
+if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+    header('Access-Control-Max-Age: 86400');
+    http_response_code(204);
+    exit;
+}
+
+// =============================================================================
 // Main execution
 // =============================================================================
 

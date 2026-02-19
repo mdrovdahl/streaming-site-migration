@@ -974,6 +974,7 @@ function endpoint_sql_chunk(
         _e2e_call_hook('test_hook_before_completion', $hook_args);
     }
 
+    $final_cursor = $reader->get_reentrancy_cursor();
     try {
         $gz->write(
             "--{$boundary}\r\n" .
@@ -981,6 +982,7 @@ function endpoint_sql_chunk(
             "Content-Length: 0\r\n" .
             "X-Chunk-Type: completion\r\n" .
             "X-Status: {$status}\r\n" .
+            "X-Cursor: " . base64_encode($final_cursor) . "\r\n" .
             "X-Batches-Processed: {$batches_processed}\r\n" .
             "X-SQL-Bytes: {$sql_bytes_processed}\r\n" .
             "X-Memory-Used: " . memory_get_peak_usage(true) . "\r\n" .
@@ -2487,6 +2489,7 @@ function stream_file_producer(
             "Content-Length: 0\r\n" .
             "X-Chunk-Type: completion\r\n" .
             "X-Status: {$status}\r\n" .
+            "X-Cursor: " . base64_encode($last_cursor) . "\r\n" .
             "X-Chunks-Processed: {$chunks_processed}\r\n" .
             "X-Files-Completed: {$files_completed}\r\n" .
             "X-Bytes-Processed: {$bytes_processed}\r\n" .
