@@ -10,14 +10,26 @@ This is a WordPress site export/import system that enables resumable, cursor-bas
 
 The codebase follows a producer-consumer pattern with two main components:
 
-### Export Side (Server) — `wordpress-plugin/generic/`
-- **export.php**: HTTP endpoint that serves as the export API, handling authentication and routing requests to the appropriate producer
+### Export Side (Server) — `wordpress-plugin/`
+- **api.php**: Standalone HTTP entry point (no WordPress dependency). Includes CORS headers for browser-based clients.
+- **wordpress/site-export.php**: WordPress admin UI under Tools → Streaming Exporter. Handles connection token setup and post-upgrade redirect.
+
+### Export Engine — `wordpress-plugin/generic/`
+- **export.php**: HTTP endpoint that serves as the export API, handling authentication and routing requests to the appropriate producer. Completion chunks include `X-Cursor` for reliable end-of-stream detection.
 - **MySQLDumpProducer**: Generates SQL dump fragments with cursor-based resumption, supporting batched INSERT statements and all MySQL data types
 - **FileTreeProducer / FileListProducer**: Streams filesystem contents (full tree or explicit list) in chunks with support for symlinks and cursor-based resumption
 
-### Import Side (Client) — `importer/`
+### Import Side (PHP CLI) — `importer/`
 - **import.php**: CLI script that downloads from export.php using streaming multipart parsing, no buffering of entire response
 - **MultipartStreamParser**: Incremental multipart/mixed parser that processes chunks as they arrive
+
+### Import Side (JS/Browser) — `importer-js/`
+- **import-orchestrator.ts**: `importSite()` — phases: preflight → sql → files, all cursor-looped with retry/backoff
+- **protocol-client.ts**: `streamEndpoint()` async generator — fetch + HMAC + multipart parsing
+- **multipart-parser.ts**: Streaming multipart/mixed parser for chunked responses (browser-compatible)
+- **hmac.ts**: HMAC-SHA256 request signing using Web Crypto API
+- **playground-sink.ts**: PlaygroundImportTarget — executes SQL via $wpdb, writes files into Playground's OPFS
+- **sql-stream-php.ts**: Bundled WP_MySQL_Naive_Query_Stream PHP class for SQLite translation
 
 ### Supporting Classes
 - **MysqlValueFormatter**: Formats MySQL values by type (NULL, numeric, binary hex, quoted strings)
@@ -123,12 +135,13 @@ PHPUnit tests automatically create/drop test databases. The naming convention is
 ## File Organization
 
 - wordpress-plugin/: Self-contained WordPress plugin directory
-  - index.php: Thin WordPress plugin loader (plugin header, constants)
-  - api.php: Standalone HTTP entry point (no WordPress dependency)
+  - index.php: Thin WordPress plugin loader (plugin header, constants, v1.4.0)
+  - api.php: Standalone HTTP entry point with CORS support (no WordPress dependency)
   - generic/: Core export engine (export.php, producers, HMAC client, secrets)
-  - wordpress/: WordPress admin UI (site-export.php)
-- importer/: Import client (import.php)
-- markdown/: Architecture documentation (read these for deep understanding)
+  - wordpress/: WordPress admin UI (site-export.php — Tools → Streaming Exporter)
+- importer/: PHP CLI import client (import.php)
+- importer-js/: Browser JS import client for WordPress Playground
+- importer-js-demo/: Vite demo app with Playwright E2E tests
 - tests/: PHPUnit test suite organized by component
 - tests/e2e/: End-to-end Docker-based integration tests
 - exports/: Git-ignored directory for test exports

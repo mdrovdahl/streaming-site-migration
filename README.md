@@ -1,4 +1,12 @@
-# WordPress Site Export - File Sync Architecture
+# WordPress Site Export - Streaming Migration
+
+A resumable, cursor-based system for synchronizing WordPress database content and
+filesystem data over HTTP. Designed for resource-constrained shared hosting — the
+plugin carefully budgets memory and execution time so it never gets your site banned.
+
+Two import clients are available: a **PHP CLI importer** for server-to-server
+migrations and a **JS client** (`importer-js`) for browser-based import into
+WordPress Playground.
 
 ## Usage
 
@@ -52,6 +60,20 @@ importer-js/src/
 
 **Demo app** (`importer-js-demo/`): Vite dev server on port 3000 with a one-click import
 UI. End-to-end Playwright test: `cd importer-js-demo && npx playwright test`
+
+### WordPress Plugin (Export Side)
+
+The plugin registers under **Tools → Streaming Exporter** in WP Admin. After
+activation (or upgrade) you're redirected to its settings page where you paste the
+connection token from your import tool.
+
+The export API at `api.php` supports **CORS** — browser-based clients like the
+Playground demo can call it directly without a proxy. Preflight `OPTIONS` requests
+are handled automatically.
+
+Both SQL and file-sync completion chunks now include an **`X-Cursor` header** so
+the client always knows the final cursor position, even for the last response in a
+stream. This makes reliable end-of-stream detection trivial.
 
 ## Technical requirements
 
