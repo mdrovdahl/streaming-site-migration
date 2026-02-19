@@ -12,18 +12,22 @@
     h1 { font-size: 20px; font-weight: 600; margin-bottom: 16px; }
 
     .controls {
-      display: flex; gap: 12px; align-items: end; flex-wrap: wrap;
       background: #313244; border-radius: 8px; padding: 16px; margin-bottom: 16px;
+      display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
     }
     .field { display: flex; flex-direction: column; gap: 4px; }
     .field label { font-size: 12px; color: #a6adc8; text-transform: uppercase; letter-spacing: 0.5px; }
     .field input {
       background: #1e1e2e; border: 1px solid #45475a; border-radius: 4px;
       color: #cdd6f4; padding: 8px 12px; font-size: 14px; font-family: monospace;
+      width: 100%;
     }
     .field input:focus { outline: none; border-color: #89b4fa; }
-    .field.url { flex: 1; min-width: 300px; }
-    .field.secret { flex: 1; min-width: 250px; }
+    .controls-actions {
+      grid-column: 1 / -1;
+      display: flex; gap: 12px; align-items: center;
+    }
+    .controls-actions .spacer { flex: 1; }
 
     button {
       background: #89b4fa; color: #1e1e2e; border: none; border-radius: 4px;
@@ -34,6 +38,13 @@
     button:disabled { background: #45475a; color: #6c7086; cursor: not-allowed; }
     button.cancel { background: #f38ba8; }
     button.cancel:hover { background: #eba0ac; }
+    button.icon-button {
+      width: 36px; padding: 0; display: inline-flex; align-items: center; justify-content: center;
+      background: #45475a; color: #cdd6f4;
+    }
+    button.icon-button:hover { background: #585b70; }
+    button.icon-button.copied { background: #a6e3a1; color: #1e1e2e; }
+    button.icon-button svg { width: 18px; height: 18px; }
 
     .status-bar {
       background: #313244; border-radius: 8px; padding: 12px 16px; margin-bottom: 16px;
@@ -41,18 +52,30 @@
     }
     .status-bar.visible { display: flex; }
     .phase-badge {
-      background: #45475a; border-radius: 4px; padding: 4px 10px;
-      font-size: 12px; font-weight: 600; text-transform: uppercase;
-      letter-spacing: 0.5px; white-space: nowrap;
+      font-size: 12px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.6px; white-space: nowrap; padding: 0;
+      background: transparent; border-radius: 0;
     }
-    .phase-badge.active { background: #89b4fa; color: #1e1e2e; }
-    .phase-badge.done { background: #a6e3a1; color: #1e1e2e; }
-    .phase-badge.error { background: #f38ba8; color: #1e1e2e; }
+    .phase-badge.active { color: #89b4fa; }
+    .phase-badge.done { color: #a6e3a1; }
+    .phase-badge.error { color: #f38ba8; }
     .status-message { flex: 1; font-size: 14px; }
     .status-count { font-family: monospace; font-size: 13px; color: #a6adc8; }
 
+    .log-accordion {
+      background: #181825; border: 1px solid #313244; border-radius: 8px; margin-bottom: 16px;
+    }
+    .log-accordion summary {
+      list-style: none; cursor: pointer; user-select: none; padding: 10px 12px;
+      font-size: 12px; color: #a6adc8; text-transform: uppercase; letter-spacing: 0.5px;
+    }
+    .log-accordion summary::-webkit-details-marker { display: none; }
+    .log-accordion summary::before {
+      content: '▸'; display: inline-block; margin-right: 8px; transition: transform 120ms ease;
+    }
+    .log-accordion[open] summary::before { transform: rotate(90deg); }
     .log {
-      background: #181825; border-radius: 8px; padding: 12px; margin-bottom: 16px;
+      border-top: 1px solid #313244; padding: 12px;
       max-height: 160px; overflow-y: auto; font-family: monospace; font-size: 12px;
       line-height: 1.6; display: none;
     }
@@ -72,34 +95,48 @@
     <h1>WordPress Playground Site Import</h1>
 
     <div class="controls">
-      <div class="field url">
+      <div class="field">
         <label>Export API URL</label>
         <input id="url" type="text" placeholder="https://example.com/?site-export-api" />
       </div>
-      <div class="field secret">
-        <label>HMAC Secret</label>
-        <input id="secret" type="password" placeholder="HMAC secret" />
-      </div>
       <div class="field">
-        <label>&nbsp;</label>
-        <label style="display:flex;gap:6px;align-items:center;cursor:pointer;font-size:14px;color:#cdd6f4;text-transform:none;letter-spacing:0">
-          <input id="skip-files" type="checkbox" checked /> Proxy media from source
-        </label>
+        <label>Connection Token</label>
+        <div style="display:flex;gap:4px">
+          <input id="secret" type="text" readonly style="cursor:default;color:#a6e3a1" />
+          <button id="btn-copy-token" class="icon-button" type="button" aria-label="Copy connection token" title="Copy connection token">
+            <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="9" y="9" width="13" height="13" rx="2"></rect>
+              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+            </svg>
+          </button>
+        </div>
+        <span style="font-size:11px;color:#6c7086;margin-top:2px">Paste this into the export plugin on your source site</span>
       </div>
-      <button id="btn-import" disabled>Loading Playground...</button>
-      <button id="btn-cancel" class="cancel" style="display:none">Cancel</button>
-      <button id="btn-admin" style="display:none;background:#cba6f7" disabled>WP Admin</button>
-      <button id="btn-fullscreen" style="display:none;background:#a6e3a1">Full Screen</button>
-      <button id="btn-delete" class="cancel" style="display:none">Delete Local Site</button>
+      <div class="controls-actions">
+        <button id="btn-import" disabled>Loading Playground...</button>
+        <button id="btn-cancel" class="cancel" style="display:none">Cancel</button>
+        <button id="btn-admin" style="display:none;background:#cba6f7" disabled>WP Admin</button>
+        <button id="btn-fullscreen" style="display:none;background:#a6e3a1">Full Screen</button>
+        <span class="spacer"></span>
+        <label style="display:flex;gap:6px;align-items:center;cursor:pointer;font-size:14px;color:#cdd6f4">
+          <input id="skip-files" type="checkbox" checked />
+          <span id="skip-files-label-text">Proxy media from source</span>
+        </label>
+        <button id="btn-delete" class="cancel" style="display:none">Delete Local Site</button>
+      </div>
     </div>
 
     <div id="status-bar" class="status-bar">
       <span id="phase-badge" class="phase-badge">-</span>
       <span id="status-message" class="status-message">-</span>
       <span id="status-count" class="status-count"></span>
+      <span id="elapsed-time" class="status-count" style="display:none"></span>
     </div>
 
-    <div id="log" class="log"></div>
+    <details id="log-accordion" class="log-accordion">
+      <summary>Import Log</summary>
+      <div id="log" class="log"></div>
+    </details>
 
     <iframe id="playground"></iframe>
   </div>

@@ -10,18 +10,86 @@ const statusBar = document.getElementById('status-bar')!;
 const phaseBadge = document.getElementById('phase-badge')!;
 const statusMessage = document.getElementById('status-message')!;
 const statusCount = document.getElementById('status-count')!;
+const logAccordion = document.getElementById('log-accordion') as HTMLDetailsElement;
 const logEl = document.getElementById('log')!;
 const urlInput = document.getElementById('url') as HTMLInputElement;
 const secretInput = document.getElementById('secret') as HTMLInputElement;
 const skipFilesInput = document.getElementById('skip-files') as HTMLInputElement;
+const skipFilesLabelText = document.getElementById('skip-files-label-text') as HTMLSpanElement;
 const btnAdmin = document.getElementById('btn-admin') as HTMLButtonElement;
 const btnFullscreen = document.getElementById('btn-fullscreen') as HTMLButtonElement;
 const btnDelete = document.getElementById('btn-delete') as HTMLButtonElement;
+const btnCopyToken = document.getElementById('btn-copy-token') as HTMLButtonElement;
 
 let playground: PlaygroundClient;
 let abortController: AbortController | null = null;
+let elapsedInterval: ReturnType<typeof setInterval> | null = null;
+
+const elapsedEl = document.getElementById('elapsed-time')!;
+
+function startElapsedTimer() {
+  const start = Date.now();
+  elapsedEl.style.display = '';
+  elapsedEl.textContent = '0:00';
+  elapsedInterval = setInterval(() => {
+    const secs = Math.floor((Date.now() - start) / 1000);
+    const h = Math.floor(secs / 3600);
+    const m = Math.floor((secs % 3600) / 60);
+    const s = secs % 60;
+    elapsedEl.textContent = h > 0
+      ? `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+      : `${m}:${String(s).padStart(2, '0')}`;
+  }, 1000);
+}
+
+function stopElapsedTimer() {
+  if (elapsedInterval) {
+    clearInterval(elapsedInterval);
+    elapsedInterval = null;
+  }
+}
+
+function setProxyMediaCheckbox(sourceUrl?: string) {
+  if (!sourceUrl) {
+    skipFilesInput.disabled = false;
+    skipFilesLabelText.textContent = 'Proxy media from source';
+    return;
+  }
+  let display = sourceUrl;
+  try {
+    display = new URL(sourceUrl).hostname;
+  } catch {
+    // Leave raw source URL if parsing fails.
+  }
+  skipFilesInput.checked = true;
+  skipFilesInput.disabled = true;
+  skipFilesLabelText.textContent = `Media proxied from ${display} (locked)`;
+}
+
+// Generate a random connection token and populate the field
+function generateToken(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(24));
+  return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+}
+secretInput.value = generateToken();
+
+btnCopyToken.addEventListener('click', () => {
+  navigator.clipboard.writeText(secretInput.value).then(() => {
+    btnCopyToken.classList.add('copied');
+    btnCopyToken.title = 'Copied';
+    btnCopyToken.setAttribute('aria-label', 'Copied');
+    setTimeout(() => {
+      btnCopyToken.classList.remove('copied');
+      btnCopyToken.title = 'Copy connection token';
+      btnCopyToken.setAttribute('aria-label', 'Copy connection token');
+    }, 1200);
+  });
+});
 
 function log(msg: string, cls = 'entry') {
+  if (cls === 'error') {
+    logAccordion.open = true;
+  }
   logEl.classList.add('visible');
   const div = document.createElement('div');
   div.className = `entry ${cls}`;
@@ -91,10 +159,9 @@ function onProgress(p: ImportProgress) {
       log(`  ${done.toLocaleString()} / ${p.filesTotal.toLocaleString()} files (${pct}%)`);
     }
   } else if (p.phase === 'sql' && p.status) {
-    if (p.bytesTotal && p.bytesDone) {
+    if (p.bytesDone) {
       const doneMB = (p.bytesDone / (1024 * 1024)).toFixed(1);
-      const totalMB = (p.bytesTotal / (1024 * 1024)).toFixed(1);
-      count = `${doneMB} / ~${totalMB} MB`;
+      count = `${doneMB} MB`;
     }
     if (p.status === 'complete') {
       log('SQL sync complete', 'success');
@@ -180,6 +247,68 @@ add_action('init', function() {
   );
 }
 
+async function disableWpCron() {
+  const docroot = await playground.documentRoot;
+  await playground.run({
+    code: `<?php
+$wpConfigPath = '${docroot}/wp-config.php';
+$wpConfig = @file_get_contents($wpConfigPath);
+if ($wpConfig === false) { exit(0); }
+if (strpos($wpConfig, "DISABLE_WP_CRON") === false) {
+  $wpConfig = preg_replace(
+    '/<\\?php\\s*/',
+    "<?php\\ndefine('DISABLE_WP_CRON', true);\\n",
+    $wpConfig,
+    1
+  );
+} else {
+  $wpConfig = preg_replace(
+    "/define\\(\\s*['\\\"]DISABLE_WP_CRON['\\\"]\\s*,\\s*(true|false)\\s*\\)\\s*;/i",
+    "define('DISABLE_WP_CRON', true);",
+    $wpConfig
+  );
+}
+@file_put_contents($wpConfigPath, $wpConfig);
+`,
+  });
+}
+
+async function installQueryMonitor() {
+  const docroot = await playground.documentRoot;
+  const zipPath = '/tmp/query-monitor.zip';
+  const res = await fetch('https://downloads.wordpress.org/plugin/query-monitor.latest-stable.zip');
+  if (!res.ok) throw new Error(`Failed to fetch Query Monitor: HTTP ${res.status}`);
+  const zipData = new Uint8Array(await res.arrayBuffer());
+  await playground.writeFile(zipPath, zipData);
+  await playground.run({
+    code: `<?php
+$zip = new ZipArchive();
+if ($zip->open('${zipPath}') !== true) { echo 'zip open failed'; exit(1); }
+$dest = '${docroot}/wp-content/plugins/';
+$zip->extractTo($dest);
+$zip->close();
+unlink('${zipPath}');
+
+// Activate via SQLite
+$dbPath = '${docroot}/wp-content/database/.ht.sqlite';
+if (file_exists($dbPath)) {
+    $db = new PDO('sqlite:' . $dbPath);
+    $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+    $row = $db->query("SELECT option_value FROM wp_options WHERE option_name = 'active_plugins'")->fetch();
+    if ($row) {
+        $plugins = unserialize($row['option_value']);
+        if (!is_array($plugins)) $plugins = [];
+        if (!in_array('query-monitor/query-monitor.php', $plugins)) {
+            $plugins[] = 'query-monitor/query-monitor.php';
+            $stmt = $db->prepare("UPDATE wp_options SET option_value = ? WHERE option_name = 'active_plugins'");
+            $stmt->execute([serialize($plugins)]);
+        }
+    }
+}
+`,
+  });
+}
+
 const OPFS_MOUNT_PATH = '/site-import-wp-content';
 
 async function persistToOpfs() {
@@ -221,6 +350,7 @@ async function restoreFromOpfs(): Promise<boolean> {
 
 async function boot() {
   log('Booting WordPress Playground...');
+  setProxyMediaCheckbox();
   playground = await startPlaygroundWeb({
     iframe,
     remoteUrl: 'https://playground.wordpress.net/remote.html',
@@ -232,10 +362,14 @@ async function boot() {
     if (restored) {
       log('Restoring site from browser storage...');
       await rewriteSiteUrl();
+      await disableWpCron();
+      log('Disabled WP-Cron for Playground runtime');
       await installAutoLogin();
       btnAdmin.style.display = '';
       btnFullscreen.style.display = '';
       btnDelete.style.display = '';
+      const proxyUrl = localStorage.getItem('proxy-source-url');
+      if (proxyUrl) setProxyMediaCheckbox(proxyUrl);
       await playground.goTo('/');
       log('Site loaded', 'success');
     } else {
@@ -264,6 +398,7 @@ async function runImport() {
   abortController = new AbortController();
   btnImport.disabled = true;
   btnCancel.style.display = '';
+  startElapsedTimer();
 
   const preflight = await detectServerRoot(remoteUrl, secret);
   if (!preflight) return;
@@ -284,7 +419,7 @@ async function runImport() {
     log(`Starting import from ${remoteUrl}${skipFiles ? ' (proxy media from source)' : ''}`);
 
     const result = await importSite(
-      { remoteUrl, secret, skipFiles },
+      { remoteUrl, secret, skipFiles, fragmentsPerBatch: 300 },
       target,
       onProgress,
       abortController.signal,
@@ -303,11 +438,23 @@ async function runImport() {
     // Install auto-login mu-plugin so WP Admin is accessible
     await installAutoLogin();
 
+    // Disable wp-cron in Playground to reduce restore-time/admin-ajax timeouts.
+    showStatus('Finalize', 'Disabling WP-Cron...');
+    await disableWpCron();
+    log('Disabled WP-Cron for Playground runtime', 'success');
+
+    // Install Query Monitor for debugging
+    showStatus('Finalize', 'Installing Query Monitor...');
+    await installQueryMonitor();
+    log('Query Monitor installed and activated', 'success');
+
     // When files are skipped, rewrite content URLs to load from source
     if (skipFiles) {
       showStatus('Finalize', 'Rewriting content URLs to source...');
       await target.rewriteContentUrls(result.sourceUrl);
       log(`Media proxied from ${result.sourceUrl}`, 'success');
+      localStorage.setItem('proxy-source-url', result.sourceUrl);
+      setProxyMediaCheckbox(result.sourceUrl);
     }
 
     // Persist wp-content to OPFS so site survives page reloads
@@ -331,6 +478,7 @@ async function runImport() {
       log(`Import failed: ${msg}`, 'error');
     }
   } finally {
+    stopElapsedTimer();
     btnImport.disabled = false;
     btnCancel.style.display = 'none';
     abortController = null;
@@ -387,6 +535,15 @@ async function detectServerRoot(remoteUrl: string, secret: string): Promise<Pref
     if (!root) throw new Error('No WordPress root found');
     log(`Server root: ${root}`, 'success');
 
+    // Log WordPress / PHP version if available
+    const wpVersion = json.wp_detect?.wp_version;
+    const phpVersion = json.php_version;
+    if (wpVersion) {
+      log(`WordPress ${wpVersion}${phpVersion ? ` (PHP ${phpVersion})` : ''}`);
+    } else if (phpVersion) {
+      log(`PHP ${phpVersion}`);
+    }
+
     const exportSettings: ExportSettings | null = json.export_settings ?? null;
     if (exportSettings) {
       const flags: string[] = [];
@@ -400,6 +557,24 @@ async function detectServerRoot(remoteUrl: string, secret: string): Promise<Pref
         log(`Source settings: ${flags.join(', ')}`, 'success');
       } else {
         log('Source settings: full export (no filters)');
+      }
+
+      // Log active theme names
+      if (exportSettings.active_theme_dirs.length > 0) {
+        const themes = exportSettings.active_theme_dirs.map(d => d.split('/').pop() ?? d);
+        log(`Themes: ${themes.join(', ')}`);
+      }
+
+      // Log active plugin names (first 3, then "+N more")
+      if (exportSettings.active_plugin_dirs.length > 0) {
+        const plugins = exportSettings.active_plugin_dirs.map(d => d.split('/').pop() ?? d);
+        const MAX_SHOW = 3;
+        if (plugins.length <= MAX_SHOW) {
+          log(`Plugins: ${plugins.join(', ')}`);
+        } else {
+          const shown = plugins.slice(0, MAX_SHOW).join(', ');
+          log(`Plugins: ${shown}, +${plugins.length - MAX_SHOW} more`);
+        }
       }
     }
 
@@ -443,6 +618,7 @@ btnDelete.addEventListener('click', async () => {
     console.warn('OPFS clear failed:', e);
   }
   localStorage.removeItem('site-imported');
+  localStorage.removeItem('proxy-source-url');
   location.reload();
 });
 
