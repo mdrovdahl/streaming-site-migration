@@ -16,6 +16,7 @@ if (!defined('ABSPATH')) {
 define('SITE_EXPORT_VERSION', '1.4.0');
 define('SITE_EXPORT_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('SITE_EXPORT_SECRET_FILE', SITE_EXPORT_PLUGIN_DIR . 'secret.php');
+define('SITE_EXPORT_SECRET_OPTION', 'site_export_shared_secret');
 
 // Intercept export API requests as early as possible.
 // WordPress loads plugin files before firing `plugins_loaded`,

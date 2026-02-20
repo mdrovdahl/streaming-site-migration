@@ -24,6 +24,7 @@ const btnCopyToken = document.getElementById('btn-copy-token') as HTMLButtonElem
 let playground: PlaygroundClient;
 let abortController: AbortController | null = null;
 let elapsedInterval: ReturnType<typeof setInterval> | null = null;
+let safeModeEnabled = localStorage.getItem('safe-mode-enabled') !== '0';
 
 const elapsedEl = document.getElementById('elapsed-time')!;
 
@@ -149,14 +150,13 @@ function onProgress(p: ImportProgress) {
       lastLoggedFileCount = Math.floor(p.filesTotal / 1000) * 1000;
       log(`  ${p.filesTotal.toLocaleString()} files indexed`);
     }
-  } else if (p.phase === 'file_fetch' && p.filesTotal) {
+  } else if (p.phase === 'file_fetch') {
     const done = p.filesDone ?? 0;
-    count = `${done.toLocaleString()} / ${p.filesTotal.toLocaleString()} files`;
+    count = `${done.toLocaleString()} files`;
     // Log every 500 files fetched
     if (done >= lastLoggedFileCount + 500) {
       lastLoggedFileCount = Math.floor(done / 500) * 500;
-      const pct = Math.round((done / p.filesTotal) * 100);
-      log(`  ${done.toLocaleString()} / ${p.filesTotal.toLocaleString()} files (${pct}%)`);
+      log(`  ${done.toLocaleString()} files fetched`);
     }
   } else if (p.phase === 'sql' && p.status) {
     if (p.bytesDone) {
@@ -255,6 +255,8 @@ add_filter('option_active_plugins', function($plugins) {
     $uri = $_SERVER['REQUEST_URI'] ?? '';
     $is_admin_request = (defined('WP_ADMIN') && WP_ADMIN) || str_contains($uri, '/wp-admin/');
     if (!$is_admin_request) return $plugins;
+    $flag = __DIR__ . '/.playground-safe-mode-enabled';
+    if (!file_exists($flag)) return $plugins;
     return [];
 }, 1);
 
@@ -263,10 +265,34 @@ add_filter('site_option_active_sitewide_plugins', function($plugins) {
     $uri = $_SERVER['REQUEST_URI'] ?? '';
     $is_admin_request = (defined('WP_ADMIN') && WP_ADMIN) || str_contains($uri, '/wp-admin/');
     if (!$is_admin_request) return $plugins;
+    $flag = __DIR__ . '/.playground-safe-mode-enabled';
+    if (!file_exists($flag)) return $plugins;
     return [];
 }, 1);
 `),
   );
+}
+
+function updateSafeModeButton() {
+  btnAdmin.textContent = safeModeEnabled ? 'Safe Mode: On' : 'Safe Mode: Off';
+  btnAdmin.title = safeModeEnabled
+    ? 'Open wp-admin with all plugins disabled'
+    : 'Open wp-admin with normal plugins enabled';
+  btnAdmin.style.background = safeModeEnabled ? '#cba6f7' : '#7f849c';
+}
+
+async function applySafeModeState() {
+  const docroot = await playground.documentRoot;
+  await playground.run({
+    code: `<?php
+$flag = '${docroot}/wp-content/mu-plugins/.playground-safe-mode-enabled';
+if (${safeModeEnabled ? 'true' : 'false'}) {
+  @file_put_contents($flag, '1');
+} else {
+  if (file_exists($flag)) @unlink($flag);
+}
+`,
+  });
 }
 
 async function disableWpCron() {
@@ -433,6 +459,7 @@ async function goToWithRetries(path: string, attempts = 4): Promise<void> {
 async function boot() {
   log('Booting WordPress Playground...');
   setProxyMediaCheckbox();
+  updateSafeModeButton();
   playground = await startPlaygroundWeb({
     iframe,
     remoteUrl: 'https://playground.wordpress.net/remote.html',
@@ -448,6 +475,7 @@ async function boot() {
       log('Disabled WP-Cron for Playground runtime');
       await applyPlaygroundCompatibility();
       await installAutoLogin();
+      await applySafeModeState();
       btnAdmin.style.display = '';
       btnFullscreen.style.display = '';
       btnDelete.style.display = '';
@@ -465,6 +493,7 @@ async function boot() {
   btnImport.disabled = false;
   btnImport.textContent = 'Import Site';
   btnAdmin.style.display = '';
+  updateSafeModeButton();
   btnAdmin.disabled = false;
   // Expose for Playwright tests
   (window as any).__playground = playground;
@@ -520,6 +549,7 @@ async function runImport() {
 
     // Install auto-login mu-plugin so WP Admin is accessible
     await installAutoLogin();
+    await applySafeModeState();
 
     // Disable wp-cron in Playground to reduce restore-time/admin-ajax timeouts.
     showStatus('Finalize', 'Disabling WP-Cron...');
@@ -683,13 +713,18 @@ btnCancel.addEventListener('click', () => {
 });
 btnAdmin.addEventListener('click', async () => {
   btnAdmin.disabled = true;
-  showStatus('Navigate', 'Opening WP Admin (Safe Mode)...');
+  safeModeEnabled = !safeModeEnabled;
+  localStorage.setItem('safe-mode-enabled', safeModeEnabled ? '1' : '0');
+  updateSafeModeButton();
+  showStatus('Navigate', `Opening WP Admin (${safeModeEnabled ? 'Safe Mode' : 'Normal Mode'})...`);
   try {
     await installAutoLogin();
+    await applySafeModeState();
+    log(`Safe mode ${safeModeEnabled ? 'enabled' : 'disabled'}`);
     // Playground sometimes times out under heavy plugin/admin-ajax load.
     // Retry navigation to provide a longer effective timeout window.
     await goToWithRetries('/wp-admin/', 6);
-    showDone('DONE', 'WP Admin loaded (Safe Mode)');
+    showDone('DONE', `WP Admin loaded (${safeModeEnabled ? 'Safe Mode' : 'Normal Mode'})`);
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     showError(`WP Admin failed: ${msg}`);

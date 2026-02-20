@@ -16,18 +16,6 @@ if (!ob_get_level()) {
     ob_start();
 }
 
-// CORS headers — HMAC secret is the real auth gate, so allow all origins
-header('Access-Control-Allow-Origin: *');
-header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
-header('Access-Control-Allow-Headers: X-Auth-Signature, X-Auth-Nonce, X-Auth-Timestamp, X-Auth-Content-Hash, X-Export-Cursor, Content-Type');
-header('Access-Control-Expose-Headers: Content-Type');
-
-// Handle OPTIONS preflight
-if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
-    http_response_code(204);
-    exit;
-}
-
 // Error handling
 set_error_handler(function ($errno, $errstr, $errfile, $errline) {
     $error = [
@@ -203,6 +191,53 @@ function site_export_find_wp_root(): ?string {
     return null;
 }
 
+/**
+ * Load the shared secret from WordPress options using SHORTINIT bootstrap.
+ *
+ * This avoids loading plugins/themes while still giving access to wpdb.
+ */
+function site_export_load_secret_from_option(string $wp_root): ?string {
+    $wp_load = $wp_root . '/wp-load.php';
+    if (!file_exists($wp_load)) {
+        return null;
+    }
+
+    if (!defined('SHORTINIT')) {
+        define('SHORTINIT', true);
+    }
+    require_once $wp_load;
+
+    global $wpdb;
+    if (!isset($wpdb) || !is_object($wpdb)) {
+        return null;
+    }
+
+    $option_name = 'site_export_shared_secret';
+    $secret = $wpdb->get_var(
+        $wpdb->prepare("SELECT option_value FROM {$wpdb->options} WHERE option_name = %s LIMIT 1", $option_name)
+    );
+    if (!is_string($secret) || $secret === '') {
+        return null;
+    }
+
+    return $secret;
+}
+
+/**
+ * Backward-compatibility fallback for older plugin installs.
+ */
+function site_export_load_secret_from_file(): ?string {
+    $secret_file = __DIR__ . '/secret.php';
+    if (!file_exists($secret_file)) {
+        return null;
+    }
+    $secret = require $secret_file;
+    if (!is_string($secret) || $secret === '') {
+        return null;
+    }
+    return $secret;
+}
+
 // =============================================================================
 // CORS — allow browser-based import tools (e.g. Playground) to call the API
 // =============================================================================
@@ -225,15 +260,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 // Main execution
 // =============================================================================
 
-// Load secret from config file
-$secret_file = __DIR__ . '/secret.php';
-if (!file_exists($secret_file)) {
-    site_export_error(503, 'Export not configured. Please configure the shared secret in WordPress admin under Tools > Site Export.');
-}
+// Find WordPress root for default directory and option lookup.
+$wp_root = site_export_find_wp_root();
 
-$secret = require $secret_file;
-if (empty($secret) || !is_string($secret)) {
-    site_export_error(503, 'Invalid secret configuration. Please reconfigure in WordPress admin.');
+// Load shared secret from WP option (with legacy file fallback).
+$secret = null;
+if ($wp_root !== null) {
+    $secret = site_export_load_secret_from_option($wp_root);
+}
+if ($secret === null) {
+    $secret = site_export_load_secret_from_file();
+}
+if ($secret === null) {
+    site_export_error(503, 'Export not configured. Please configure the shared secret in WordPress admin under Tools > Site Export.');
 }
 
 // Verify HMAC authentication
@@ -241,9 +280,6 @@ $auth_error = site_export_verify_hmac($secret);
 if ($auth_error !== null) {
     site_export_error(403, $auth_error);
 }
-
-// Find WordPress root for default directory
-$wp_root = site_export_find_wp_root();
 
 // Set default directory to WordPress root if not specified
 if (!isset($_GET['directory']) && !isset($_POST['directory']) && $wp_root !== null) {

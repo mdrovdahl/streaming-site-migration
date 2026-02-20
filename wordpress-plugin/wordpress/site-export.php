@@ -3,8 +3,8 @@
  * Admin interface for Site Export plugin.
  *
  * This plugin provides a WordPress admin UI for configuring the export API.
- * The actual API endpoint (api.php) runs WITHOUT loading WordPress for
- * performance and stability - it reads the secret directly from secret.php.
+ * The shared secret is stored in a WordPress option so it travels with
+ * backups/migrations and does not rely on plugin directory write access.
  *
  * Authentication uses HMAC signatures: the importing side generates a secret,
  * the user enters it here, and all requests must include a valid signature
@@ -66,7 +66,7 @@ class Site_Export_Plugin {
 
         $secret = isset($_POST['site_export_secret']) ? sanitize_text_field($_POST['site_export_secret']) : '';
 
-        // Write secret to PHP file
+        // Persist secret in WordPress options.
         $result = $this->save_secret($secret);
 
         if (is_wp_error($result)) {
@@ -87,27 +87,17 @@ class Site_Export_Plugin {
     }
 
     /**
-     * Save the secret to the PHP config file.
+     * Save the secret to WordPress options.
      *
      * @param string $secret The shared secret
      * @return true|WP_Error
      */
     private function save_secret(string $secret) {
-        $content = "<?php\n";
-        $content .= "/**\n";
-        $content .= " * Site Export shared secret.\n";
-        $content .= " * Generated: " . gmdate('Y-m-d H:i:s') . " UTC\n";
-        $content .= " * \n";
-        $content .= " * DO NOT share this file or commit it to version control.\n";
-        $content .= " */\n";
-        $content .= "return " . var_export($secret, true) . ";\n";
-
-        $result = file_put_contents(SITE_EXPORT_SECRET_FILE, $content);
-
-        if ($result === false) {
+        $result = update_option(SITE_EXPORT_SECRET_OPTION, $secret, false);
+        if ($result === false && get_option(SITE_EXPORT_SECRET_OPTION, null) !== $secret) {
             return new WP_Error(
-                'write_failed',
-                'Could not write to ' . SITE_EXPORT_SECRET_FILE . '. Check file permissions.'
+                'update_failed',
+                'Could not save secret to WordPress options.'
             );
         }
 
@@ -115,17 +105,26 @@ class Site_Export_Plugin {
     }
 
     /**
-     * Load the current secret from config file.
+     * Load the current secret from options, with one-time migration from file.
      *
      * @return string
      */
     private function load_secret(): string {
-        if (!file_exists(SITE_EXPORT_SECRET_FILE)) {
-            return '';
+        $secret = get_option(SITE_EXPORT_SECRET_OPTION, '');
+        if (is_string($secret) && $secret !== '') {
+            return $secret;
         }
 
-        $secret = require SITE_EXPORT_SECRET_FILE;
-        return is_string($secret) ? $secret : '';
+        // Backward compatibility: migrate from legacy secret.php if present.
+        if (file_exists(SITE_EXPORT_SECRET_FILE)) {
+            $legacy = require SITE_EXPORT_SECRET_FILE;
+            if (is_string($legacy) && $legacy !== '') {
+                update_option(SITE_EXPORT_SECRET_OPTION, $legacy, false);
+                return $legacy;
+            }
+        }
+
+        return '';
     }
 
     /**
@@ -352,10 +351,6 @@ register_activation_hook(SITE_EXPORT_PLUGIN_DIR . 'index.php', function() {
         set_transient('site_export_activated', 1, 30);
     }
 
-    $gitignore = SITE_EXPORT_PLUGIN_DIR . '.gitignore';
-    if (!file_exists($gitignore)) {
-        file_put_contents($gitignore, "secret.php\n");
-    }
 });
 
 // Redirect to settings page after activation or upgrade.

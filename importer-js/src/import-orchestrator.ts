@@ -7,6 +7,28 @@ const DEFAULT_FRAGMENTS_PER_BATCH = '1000';
 const DEFAULT_CHUNK_SIZE = '5242880';
 const SQL_EXEC_BATCH_BYTES = 2 * 1024 * 1024; // Execute SQL in ~2MB increments
 
+/**
+ * Find the last SQL statement boundary (;\n or ;\r\n) in a buffer.
+ * Returns everything up to and including the last complete statement,
+ * plus the remainder.  Safe for our export format where string values
+ * are base64-encoded (base64 never contains ';').
+ */
+function splitAtLastStatementBoundary(data: Uint8Array): { batch: Uint8Array; rest: Uint8Array } {
+	const SEMICOLON = 0x3B; // ;
+	const NEWLINE = 0x0A;   // \n
+
+	for (let i = data.length - 1; i >= 1; i--) {
+		if (data[i] === NEWLINE && data[i - 1] === SEMICOLON) {
+			return {
+				batch: data.subarray(0, i + 1),
+				rest: data.subarray(i + 1),
+			};
+		}
+	}
+	// No statement boundary found — keep everything as remainder
+	return { batch: new Uint8Array(0), rest: data };
+}
+
 const INTER_REQUEST_DELAY_MS = 500;
 const INITIAL_BACKOFF_MS = 2000;
 const MAX_BACKOFF_MS = 30000;
@@ -208,14 +230,17 @@ async function runSqlSync(
 
 					if (sqlBufferSize >= SQL_EXEC_BATCH_BYTES) {
 						const combined = concatUint8Arrays(sqlBuffer);
-						const result = await target.executeSql(combined);
-						if (result.exitCode !== 0) {
-							throw new Error(`SQL execution failed: ${result.errors}`);
+						const { batch, rest } = splitAtLastStatementBoundary(combined);
+						if (batch.length > 0) {
+							const result = await target.executeSql(batch);
+							if (result.exitCode !== 0) {
+								throw new Error(`SQL execution failed: ${result.errors}`);
+							}
+							batchesExecuted++;
+							onProgress?.({ phase: 'sql', status: `batch ${batchesExecuted}`, bytesTotal: estimatedBytes, bytesDone: totalBytesReceived });
 						}
-						batchesExecuted++;
-						onProgress?.({ phase: 'sql', status: `batch ${batchesExecuted}`, bytesTotal: estimatedBytes, bytesDone: totalBytesReceived });
-						sqlBuffer = [];
-						sqlBufferSize = 0;
+						sqlBuffer = rest.length > 0 ? [rest] : [];
+						sqlBufferSize = rest.length;
 					}
 				}
 			});
@@ -295,6 +320,7 @@ async function runFileFetch(
 	// Decode base64-encoded paths from file_index before sending to server
 	const fileBody = new TextEncoder().encode(JSON.stringify(fileList.map(f => decodeBase64Path(f.path))));
 	let filesDone = 0;
+	const completedFiles = new Set<string>();
 	const pendingFiles = new Map<string, Uint8Array[]>();
 
 	while (true) {
@@ -310,8 +336,11 @@ async function runFileFetch(
 
 			const completion = await drainGenerator(gen, async (chunk) => {
 				if (chunk.type === 'file') {
-					await handleFileChunk(chunk, target, serverRoot, pendingFiles);
-					filesDone++;
+					const completedPath = await handleFileChunk(chunk, target, serverRoot, pendingFiles);
+					if (completedPath && !completedFiles.has(completedPath)) {
+						completedFiles.add(completedPath);
+						filesDone++;
+					}
 				} else if (chunk.type === 'directory') {
 					const dirPath = decodeBase64Path(chunk.headers['x-directory-path'] ?? chunk.headers['x-file-path'] ?? '');
 					const localPath = mapServerPath(dirPath, serverRoot, target.documentRoot);
@@ -345,7 +374,7 @@ async function handleFileChunk(
 	target: ImportTarget,
 	serverRoot: string,
 	pendingFiles: Map<string, Uint8Array[]>,
-): Promise<void> {
+): Promise<string | null> {
 	const filePath = decodeBase64Path(chunk.headers['x-file-path'] ?? '');
 	const chunkIndex = parseInt(chunk.headers['x-chunk-index'] ?? '0', 10);
 	const totalChunks = parseInt(chunk.headers['x-total-chunks'] ?? '1', 10);
@@ -353,7 +382,7 @@ async function handleFileChunk(
 	if (totalChunks === 1) {
 		const localPath = mapServerPath(filePath, serverRoot, target.documentRoot);
 		await target.writeFile(localPath, chunk.body);
-		return;
+		return filePath;
 	}
 
 	if (!pendingFiles.has(filePath)) {
@@ -367,7 +396,10 @@ async function handleFileChunk(
 		const localPath = mapServerPath(filePath, serverRoot, target.documentRoot);
 		await target.writeFile(localPath, combined);
 		pendingFiles.delete(filePath);
+		return filePath;
 	}
+
+	return null;
 }
 
 export function sleep(ms: number): Promise<void> {

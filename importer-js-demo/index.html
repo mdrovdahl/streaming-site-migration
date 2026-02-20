@@ -25,9 +25,18 @@
     .field input:focus { outline: none; border-color: #89b4fa; }
     .controls-actions {
       grid-column: 1 / -1;
-      display: flex; gap: 12px; align-items: center;
+      display: flex; gap: 12px; align-items: center; flex-wrap: wrap;
     }
-    .controls-actions .spacer { flex: 1; }
+    .controls-options {
+      width: 100%;
+      display: flex;
+      justify-content: flex-end;
+    }
+    .proxy-toggle {
+      display: flex; gap: 6px; align-items: center; cursor: pointer;
+      font-size: 14px; color: #cdd6f4; min-width: 0;
+    }
+    .proxy-toggle span { overflow-wrap: anywhere; }
 
     button {
       background: #89b4fa; color: #1e1e2e; border: none; border-radius: 4px;
@@ -88,6 +97,11 @@
       width: 100%; height: calc(100vh - 300px); min-height: 400px;
       border: 1px solid #45475a; border-radius: 8px; background: #fff;
     }
+
+    @media (max-width: 900px) {
+      .controls { grid-template-columns: 1fr; }
+      .controls-options { justify-content: flex-start; }
+    }
   </style>
 </head>
 <body>
@@ -115,14 +129,15 @@
       <div class="controls-actions">
         <button id="btn-import" disabled>Loading Playground...</button>
         <button id="btn-cancel" class="cancel" style="display:none">Cancel</button>
-        <button id="btn-admin" style="display:none;background:#cba6f7" disabled title="Open wp-admin with Playground safe mode plugin filtering">Safe Mode</button>
+        <button id="btn-admin" style="display:none;background:#cba6f7" disabled title="Open wp-admin with all plugins disabled">Safe Mode</button>
         <button id="btn-fullscreen" style="display:none;background:#a6e3a1">Full Screen</button>
-        <span class="spacer"></span>
-        <label style="display:flex;gap:6px;align-items:center;cursor:pointer;font-size:14px;color:#cdd6f4">
-          <input id="skip-files" type="checkbox" checked />
-          <span id="skip-files-label-text">Proxy media from source</span>
-        </label>
         <button id="btn-delete" class="cancel" style="display:none">Delete Local Site</button>
+        <div class="controls-options">
+          <label class="proxy-toggle">
+            <input id="skip-files" type="checkbox" checked />
+            <span id="skip-files-label-text">Proxy media from source</span>
+          </label>
+        </div>
       </div>
     </div>
 
